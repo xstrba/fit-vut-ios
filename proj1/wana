@@ -1,0 +1,337 @@
+#!/usr/bin/env bash
+
+#####################################
+#                                   #
+# Skript: wana                      #
+# Brief: analyzátor webových logů   #
+# Author: Boris Strbak, xstrba05    #
+# Zadavatel: FIT VUT BRNO           #
+# Predmet: IOS                      #
+#                                   #
+#####################################
+
+POSIXLY_CORRECT=yes
+IFS=' ' #oddelovac retazcov
+
+#sprava popisujuca sposob pouzitia skriptu
+err_msg='
+Use like this:
+wana [FILTR] [PŘÍKAZ] [LOG [LOG2 [...]]
+
+PŘÍKAZ může být jeden z:
+– list-ip
+– list-hosts
+– list-uri
+– hist-ip
+– hist-load
+
+FILTR může být kombinace následujících:
+– -a DATETIME
+- -b DATETIME
+– -ip IPADDR
+– -uri URI'
+
+#pole, v ktorom su ulozene filtre
+declare -A flags
+
+#spracovava filtre
+while getopts ":a:b:i:u:" o 
+do
+  ((index=$OPTIND-1)) #index filtru [nie jeho parametru]
+  case "$o" in
+    i) if [ ${!index} = "-ip" ]
+        then
+          #kontrola existencie dalsieho argumentu
+          test ${!OPTIND} || {
+            echo Wrong filter
+            echo $err_msg
+            exit 1
+          }
+          #kontrola ci IP obsahuje iba
+          #cislo, pismeno a-f, bodku alebo dvojbodku
+          [[ "${!OPTIND}" =~ ^[0-9a-fA-F.:]+$ ]] || { 
+            echo Wrong IP
+            echo $err_msg
+            exit 1
+          }
+          flags[ip]=${!OPTIND}
+          ((OPTIND++)) #kvoli -i[p] [OPTION]
+                        #ako OPTIND sa berie index [p] a nie [OPTION]	
+        else
+          echo "wrong filter"; echo $err_msg ; exit 1	
+        fi;;
+    u) if [ ${!index} = "-uri" ]
+        then
+          #kontola existencie dalsieho argumentu
+          test ${!OPTIND} || {
+            echo Wrong filter
+            echo $err_msg
+            exit 1
+          }
+          flags[uri]=${!OPTIND}
+          ((OPTIND++)) #rovnako ako vyssie kvoli -u[ri]
+        else
+          echo "wrong filter"; echo $err_msg; exit 1
+        fi;;
+    a|b) echo "$OPTARG" | grep -qE '[0-9]{4}(\-[0-9]{2}){2}\ [0-9]{2}(:[0-9]{2}){2}' || {
+
+                  echo Wrong date
+                  echo $err_msg
+                  exit 1
+
+          }; flags[$o]=$OPTARG;; 
+    *) echo "wrong filter"; echo $err_msg ; exit 1;;	
+  esac  
+done
+
+#shiftuje o prislusny pocet filtrov
+((OPTIND--))
+shift $OPTIND
+
+#berie prvy argument ako prikaz
+#a shiftuje dalej aby zostali uz
+#iba subory na citanie
+case "$1" in
+  "list-ip");&
+  "list-hosts");&
+  "list-uri");&
+  "hist-ip");&
+  "hist-load") prikaz=$1
+                shift;; 
+esac
+
+#pole pre konvertovanie retazca
+#s nazvom mesiaca na cislo
+declare -A months
+months=([Jan]=01 [Feb]=02 [Mar]=03 [Apr]=04 [Maj]=05 [Jun]=06)
+months+=([Jul]=07 [Aug]=08 [Sep]=09 [Okt]=10 [Nov]=11 [Dec]=12)
+
+#funkcia na porovnanie datumov
+function compare_date () {
+
+  if (($1 > $2))
+  then
+    return 0
+  elif (($1 < $2))
+  then
+    return 1 
+  fi
+	#pre program nechceme brat rovnajuce sa datumy
+  #preto treba odlisit az 3 navratove hodnoty
+  return -1
+
+}
+
+function filt_a () {
+
+    while read string od odd log_date; do
+    if test "${flags[a]}";
+    then
+      input_date=${flags[a]//[!0-9]/}
+      
+      #datum z logu na cislo
+      DD=${log_date:1:2}
+      MM=${log_date:4:3}
+      YY=${log_date:8:4}
+      hh=${log_date:13:2}
+      mm=${log_date:16:2}
+      ss=${log_date:19:2}
+      date1="$YY${months[$MM]}$DD$hh$mm$ss"
+      
+      #datum z inputu na cislo   
+      YY=${input_date:0:4}
+      MM=${input_date:4:2}
+      DD=${input_date:6:2}
+      hh=${input_date:8:2}
+      mm=${input_date:10:2}
+      ss=${input_date:12:2}
+      date2="$YY$MM$DD$hh$mm$ss"
+      compare_date "$date1" "$date2"; test $? -eq 0  && echo "$string $od $odd $log_date"
+    else
+      echo "$string $od $odd $log_date"
+    fi
+    done
+
+}
+
+function filt_b () {
+
+  while read string od odd log_date; do
+    if test "${flags[b]}";
+    then
+      input_date=${flags[b]//[!0-9]/}
+      #datum z logu na cislo
+      DD=${log_date:1:2}
+      MM=${log_date:4:3}
+      YY=${log_date:8:4}
+      hh=${log_date:13:2}
+      mm=${log_date:16:2}
+      ss=${log_date:19:2}
+      date1="$YY${months[$MM]}$DD$hh$mm$ss"
+      
+      #datum z inputu na cislo
+      YY=${input_date:0:4}
+      MM=${input_date:4:2}
+      DD=${input_date:6:2}
+      hh=${input_date:8:2}
+      mm=${input_date:10:2}
+      ss=${input_date:12:2}
+      date2="$YY$MM$DD$hh$mm$ss"
+      compare_date "$date1" "$date2"; test $? -eq 1 &&  echo "$string $od $odd $log_date"
+    else
+
+      echo "$string $od $odd $log_date"
+    fi
+  done
+
+}
+
+function filt_ip () {
+
+  while read string rest; do
+    if test ${flags[ip]};
+    then
+    if test "$string" = "${flags[ip]}";
+    then
+      echo "$string $rest"
+    fi
+    else
+      echo "$string $rest"
+    fi
+  done
+
+}
+
+function filt_uri () {
+
+  if test ${flags[uri]}
+  then
+    grep -E "(GET|HEAD|POST) ${flags[uri]}"
+  else
+    awk '{print $0}'
+  fi
+	
+}
+
+#tiskne adekvatny pocet #
+print_hash () {
+
+  END=$1
+  i=1
+  while (( i<=END ));
+  do
+    printf "#"
+    (( i++ ))
+  done
+
+}
+
+#pre kazdy parameter cita obsah suboru
+#a filtruje podla hodnot filtrov
+echo_files () {
+
+  for file in $@ 
+  do
+    if [ -f $file ]
+    then
+      if file --mime-type "$file" | grep -q gzip$;	#test for gz file
+      then
+        gunzip -c $file
+      else
+        cat $file
+      fi | filt_a | filt_b | filt_ip | filt_uri 
+    fi
+  done
+
+}
+
+#hlavna funkcia ktora cita subory
+#a vykonava prikazy
+main () {
+
+    case "$prikaz" in
+      "list-ip")	
+          awk '{print $1}' | sort | uniq;;
+      "list-hosts")
+          awk '{print $1}' | 
+            {
+              while read ip;
+              do 
+                host $ip |
+                    awk '{print $5}' | 
+                    {
+                      while read hostout;
+                      do 
+                        if [[ $hostout =~ [0-9]\(.*\)$ ]]
+                        then
+                          echo $ip
+                        elif [[ $hostout =~ .*\.$ ]];
+                        then
+                          echo $hostout
+                        fi
+                      done
+                    }
+              done														
+            } | sort | uniq;;
+      "list-uri")
+          grep -oE "(GET |HEAD |POST ).*? " | 
+                awk '{print $2}' | sort | uniq;;
+      "hist-ip")
+          awk '{print $1}' | 
+                sort | uniq -c | sort -n -r | 
+                {
+                  while read count ip;
+                  do
+                    hashes=`print_hash $count`
+                    printf "%s (%d): %s\n" $ip $count $hashes
+                  done
+                };;
+    "hist-load") 
+        awk '{print $4}' | 
+            {
+              while read line;
+              do
+                log_date=${line//[!0-9a-zA-Z]/}
+                
+                DD=${log_date:0:2}
+                MM=${log_date:2:3}
+                YY=${log_date:5:4}
+                hh=${log_date:9:2}
+                echo "$YY-${months[$MM]}-$DD $hh:00" 
+              done
+            } | sort | uniq -c |
+                  {
+                    while read count time;
+                    do
+                      printf "%s (%d): %s\n" "$time" $count `print_hash $count`
+                    done
+                  };;
+      "")	awk '{print $0}';; 
+  esac
+
+}
+
+#ak nema na vstupe ziadny subor
+#cita logy zo stdin
+if test -z $1;
+then
+  echo "$(cat)" | main
+  exit 0
+fi
+
+#kontroluje, ci su zadane obycajne subory
+#a ci su citatelne
+for file in $@
+do
+  test -f $file -a -r $file || 
+  {
+    echo "subor $file" nie je vhodny
+    echo $err_msg
+    exit 1
+  }
+done
+
+#spusta hlavnu funkciu
+echo_files $@ | main
+
+exit 0
